@@ -2,7 +2,7 @@
 
 This tutorial takes up the previous one
 [aws-terraform-tuto07](https://richardpct.github.io/post/2021/04/17/aws-with-terraform-tutorial-07/)
-by adding autoscaling policy in order to scale our web server according to a
+by adding autoscaling policy in order to scale up our web server according to a
 metric that you chose, for our example I chose to add a web server if the CPU
 Load is higher than a threshold that I have defined.
 
