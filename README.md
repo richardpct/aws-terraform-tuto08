@@ -14,24 +14,26 @@ The source code can be found [here](https://github.com/richardpct/aws-terraform-
 
 ## Configuring the autoscaling policy
 
-#### modules/webserver/main.tf
+#### modules/web/main.tf
 
 I only show the relevant excerpt on how to configure the autoscaling policy:
 
 ```
 resource "aws_autoscaling_group" "web" {
-  name                 = "asg_web-${var.env}"
-  launch_configuration = aws_launch_configuration.web.id
-  vpc_zone_identifier  = [data.terraform_remote_state.base.outputs.subnet_private_web_a_id, data.terraform_remote_state.base.outputs.subnet_private_web_b_id]
-  target_group_arns    = [data.terraform_remote_state.base.outputs.alb_target_group_web_arn]
-  health_check_type    = "ELB"
+  name                = "asg_web-${var.env}"
+  vpc_zone_identifier = data.terraform_remote_state.network.outputs.subnet_private_web_id[*]
+  target_group_arns   = [data.terraform_remote_state.network.outputs.alb_target_group_web_arn]
+  health_check_type   = "ELB"
+  min_size            = 2
+  max_size            = 3
 
-  min_size             = 2
-  max_size             = 3
+  launch_template {
+    id = aws_launch_template.web.id
+  }
 
   tag {
     key                 = "Name"
-    value               = "webserver-${var.env}"
+    value               = "web-${var.env}"
     propagate_at_launch = true
   }
 }
@@ -57,106 +59,68 @@ resource "aws_autoscaling_policy" "web" {
 CPU Load Metric for scaling the web servers.<br />
 `target_value = 40.0` intends to scale up when the average CPU Load of all our
 web server is higher than 40% and when the average is lower than 40% the
-autoscaling will scale down the service.
+autoscaling will scale down.
 
 ## Deploying the infrastructure
 
-Export the following environment variables:
+Prepare your variables at ~/terraform/aws-terraform-tuto08/terraform_vars_dev_secrets:
 
-    $ export TF_VAR_region="eu-west-3"
-    $ export TF_VAR_bucket="yourbucket-terraform-state"
-    $ export TF_VAR_dev_base_key="terraform/dev/base/terraform.tfstate"
-    $ export TF_VAR_dev_bastion_key="terraform/dev/bastion/terraform.tfstate"
-    $ export TF_VAR_dev_database_key="terraform/dev/database/terraform.tfstate"
-    $ export TF_VAR_dev_webserver_key="terraform/dev/webserver/terraform.tfstate"
-    $ export TF_VAR_ssh_public_key="ssh-rsa XXX..."
-    $ export TF_VAR_my_ip_address=$(curl -s 'https://duckduckgo.com/?q=ip&t=h_&ia=answer' \
-    | sed -e 's/.*Your IP address is \([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\) in.*/\1/')
+```
+export TF_VAR_aws_profile="dev"
+export TF_VAR_region="eu-west-3"
+export TF_VAR_bucket="XXX-tofu-state"
+export TF_VAR_key_network="tuto-08/dev/network/terraform.tfstate"
+export TF_VAR_key_bastion="tuto-08/dev/bastion/terraform.tfstate"
+export TF_VAR_key_database="tuto-08/dev/database/terraform.tfstate"
+export TF_VAR_key_web="tuto-08/dev/web/terraform.tfstate"
+export TF_VAR_ssh_public_key="ssh-ed25519 AAAAXXX"
+MY_IP=$(curl -s ifconfig.co/)
+export TF_VAR_my_ip_address="$MY_IP/32"
+```
 
 Building:
 
-    $ cd environments/dev
-    $ cd 00-network
-    $ terraform init \
-        -backend-config="bucket=${TF_VAR_bucket}" \
-        -backend-config="key=${TF_VAR_dev_network_key}" \
-        -backend-config="region=${TF_VAR_region}"
-    $ terraform apply
-    $ cd ../01-bastion
-    $ terraform init \
-        -backend-config="bucket=${TF_VAR_bucket}" \
-        -backend-config="key=${TF_VAR_dev_bastion_key}" \
-        -backend-config="region=${TF_VAR_region}"
-    $ terraform apply
-    $ cd ../02-database
-    $ terraform init \
-        -backend-config="bucket=${TF_VAR_bucket}" \
-        -backend-config="key=${TF_VAR_dev_database_key}" \
-        -backend-config="region=${TF_VAR_region}"
-    $ terraform apply
-    $ cd ../03-webserver
-    $ terraform init \
-        -backend-config="bucket=${TF_VAR_bucket}" \
-        -backend-config="key=${TF_VAR_dev_webserver_key}" \
-        -backend-config="region=${TF_VAR_region}"
-    $ terraform apply
-
-You need to perform `terraform init` once.
+    $ cd envs/dev/01-network
+    $ make apply
+    $ cd ../02-bastion
+    $ make apply
+    $ cd ../03-database
+    $ make apply
+    $ cd ../04-web
+    $ make apply
 
 ## Testing your infrastructure
 
 When your infrastructure is built, get the DNS name of your Load Balancer by
 performing the following command:
 
-    $ aws elbv2 describe-load-balancers --names alb-web-dev \
+    $ aws --profile dev elbv2 describe-load-balancers --names alb-web-dev \
         --query 'LoadBalancers[*].DNSName' \
         --output text
 
-Get the ARN of your Load Balancer:
-
-    $ aws elbv2 describe-load-balancers --names alb-web-dev \
-        --query 'LoadBalancers[*].LoadBalancerArn' \
-        --output text
-
-Get the ARN of your Target Groups by providing the Load Balancer ARN:
-
-    $ aws elbv2 describe-target-groups \
-        --load-balancer-arn arn:aws:elasticloadbalancing:eu-west-3:xxxxxxxxxxxx:loadbalancer/app/alb-web-dev/xxxxxxxxxxxxxxxx \
-        --query 'TargetGroups[*].TargetGroupArn' \
-        --output text
-
-Perform the following command by providing the Target Group ARN until you have
-2 healthy instances:
-
-    $ aws elbv2 describe-target-health \
-        --target-group-arn arn:aws:elasticloadbalancing:eu-west-3:xxxxxxxxxxxx:targetgroup/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
 Then issue the following command several times for increasing the counter:
 
-    $ curl http://ARN_load_balancer:8000/cgi-bin/hello.py
+    $ curl http://DNS_load_balancer/cgi-bin/hello.py
 
-It should return the count of requests you have performed.
+It should return the count of requests you have performed, and you notice that
+you see 2 differents instance-id.
 
 ## Testing the automation of autoscaling
 
-Chose one of the 2 running instances and connect to it, then install a package
-stress in order to burn the CPU:
+Chose one of the 2 running instances and connect to it, then install the stress
+package in order to burn the CPU:
 
-    $ ssh -J ec2-user@IP_public_bastion ec2-user@IP_private_instance
+    $ ssh -J ec2-user@IP_public_bastion ec2-user@IP_private_instance_web
     $ sudo su -
     # yum install stress
     # stress --cpu 1
 
 Wait for a while, then a third web server will be created and the Load Balancer
-will register it, you now have three healthy instances:
+will register it, you now have three healthy instances.<br />
+If you make some requests to the service again, you will notice that the three
+servers will serve your requests by displaying 3 differents instance-id:
 
-    $ aws elbv2 describe-target-health \
-        --target-group-arn arn:aws:elasticloadbalancing:eu-west-3:xxxxxxxxxxxx:targetgroup/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-If you make some requests to the service, you will notice that the three
-servers will serve your requests in turn:
-
-    $ curl http://ARN_load_balancer/cgi-bin/hello.py
+    $ curl http://DNS_load_balancer/cgi-bin/hello.py
 
 For testing the scale down when there is no longer high load, just stop the
 stress process by pressing `CTRL-C` in your terminal, then a web server will be
@@ -166,13 +130,18 @@ terminated and you have now 2 web servers up and running.
 
 After finishing your test, destroy your infrastructure:
 
-    $ cd environments/dev
-    $ cd 03-webserver
-    $ terraform destroy
-    $ cd ../02-database
-    $ terraform destroy
-    $ cd ../01-bastion
-    $ terraform destroy
-    $ cd ../00-network
-    $ terraform destroy
+    $ cd envs/dev/04-web
+    $ make destroy
+    $ cd ../03-database
+    $ make destroy
+    $ cd ../02-bastion
+    $ make destroy
+    $ cd ../01-network
+    $ make destroy
 
+## Summary
+
+I showed you how to configure an infrastructure with auto scaling.<br />
+In the next chapter, I will show you how to build a real infrastructure by
+deploying Gitlab, and we will leverage and apply all the lessons we have
+learned for now.
